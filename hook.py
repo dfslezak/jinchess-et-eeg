@@ -28,16 +28,7 @@ download_line = {"Windows"   : 'C:\Python27\Python -u C:\Experimento\download.py
 destPath = {"Windows"   : "C:\\Chess\\datos\\",
             "Linux"     : "~/repos/neurociencia/ajedrez/experimentos/datos/"} [platform.system ()]
 
-global LPTPortNum, lag_time, code_reset, code_white, code_black, code_gamestarted, code_gamecancelled, code_gameended, white_turn
-
-# Nombre de archivo para guardar datos de ET
-# edf_filename = ''
-
-# numero del puerto LPT
-LPTPortNum = 0x378
-
-# tiempo a esperar entre el codigo y el reset
-lag_time = 0.03
+global code_white, code_black, code_gamestarted, code_gamecancelled, code_gameended, white_turn, last_turn_color, lpt, serial_port
 
 # deshabilitar eyetracker
 disable_eyetracker = 1
@@ -45,26 +36,30 @@ disable_eyetracker = 1
 # deshabilitar puerto serie (solo utilizado para NIRS)
 disable_serial_port = 1
 
-# para comunicarse con el puerto paralelo
-import ctypes
-
 # para comunicarse con el puerto serie
 if not disable_serial_port:
-    import serial
-
-# para generar un delay
-import time
+    from comms import SerialPort
+    serial_port = serial.Serial(0)
+    print serial_port.portstr
 
 # para configurar y usar el eyetracker
 if not disable_eyetracker:
     import eyetracker
     global eyetracker, tracker_software_ver , eyelink_ver, edf_filename
 
-if not disable_serial_port:
-    global serialPort
+# Parámetros para el puerto paralelo
 
-# numero de reset
+# numero del puerto LPT
+LPTPortNum = 0x378
+# tiempo a esperar entre el codigo y el reset
+lag_time = 0.03
+# codigo de reset... restablecer a default
 code_reset = 0
+
+# Parallel port initialization
+from comms import LPTPort
+lpt = LPTPort()
+lpt.initialize(LPTPortNum,lag_time,code_reset)
 
 # codigo de cada turno
 code_white = 1
@@ -75,33 +70,12 @@ code_gamestarted = 32
 code_gamecancelled = 16
 code_gameended = 64
 
-
-def sendLPT(code):
-    global LPTPortNum, lag_time, code_reset
-    # Mandar el codigo...
-    ctypes.windll.inpout32.Out32 (LPTPortNum, code)
-    # ...esperar el lag...
-    time.sleep(lag_time)
-    # ...mandar el reset
-    ctypes.windll.inpout32.Out32 (LPTPortNum, code_reset)
-
-    return
-
-
-def sendSerialPort(code):
-    global serialPort
-
-    ser.write(code)
-
-    return
-
-
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # #  Funciones a aplicar en cada caso # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 white_turn = None
-
+last_turn_color = 'B' # Used to check repeated lines. 
 
 def userFound ():
     # declarar los globales que vayamos a usar
@@ -126,7 +100,7 @@ def userFound ():
 
 def gameStarted ():
     # declarar los globales que vayamos a usar
-    global state, white_turn, edf_filename, mouse_filename, mousefile, code_gamestarted
+    global state, white_turn, edf_filename, mouse_filename, mousefile, code_gamestarted, lpt, serial_port
 
     # aca habra que hacer alguna magia
     print ">>>>>>>>>>>>>>> GAME STARTED <<<<<<<<<<<<<<<"
@@ -156,9 +130,9 @@ def gameStarted ():
         eyetracker.printToEDFfile(">>>>>>>>>>>>>>> GAME STARTED <<<<<<<<<<<<<<<")
 
     # Send to serial and parallel port.
-    sendLPT (code_gamestarted)
+    lpt.write (code_gamestarted)
     if not disable_serial_port:
-        sendSerialPort (code_gamestarted)
+        serial_port.write(code_gamestarted)
 
     return
 
@@ -167,7 +141,7 @@ def gameStarted ():
 
 def gameCancelled ():
     # declarar los globales que vayamos a usar
-    global state, mouse_filename, mousefile, code_gamecancelled, destPath
+    global state, mouse_filename, mousefile, code_gamecancelled, destPath, lpt, serial_port
 
     # aca habra que hacer alguna magia
     print ">>>>>>>>>>>>>>> GAME CANCELLED <<<<<<<<<<<<<<<"
@@ -175,9 +149,9 @@ def gameCancelled ():
     # terminamos con un juego
     state = None
 
-    sendLPT (code_gamecancelled)
+    lpt.write(code_gamecancelled)
     if not disable_serial_port:
-        sendSerialPort (code_gamecancelled)
+        serial_port.write(code_gamecancelled)
 
     if not disable_eyetracker:
         eyetracker.printToEDFfile(">>>>>>>>>>>>>>> GAME CANCELLED <<<<<<<<<<<<<<<")
@@ -195,7 +169,7 @@ def gameCancelled ():
 
 def gameEnded ():
     # declarar los globales que vayamos a usar
-    global download_line, user, state, edf_filename, code_gameended, destPath
+    global download_line, user, state, edf_filename, code_gameended, destPath, lpt, serial_port
 
     # aca habra que hacer alguna magia
     print ">>>>>>>>>>>>>>> GAME ENDED <<<<<<<<<<<<<<<"
@@ -208,9 +182,9 @@ def gameEnded ():
     # terminamos con un juego
     state = None
 
-    sendLPT (code_gameended)
+    lpt.write(code_gameended)
     if not disable_serial_port:
-        sendSerialPort (code_gameended)
+        serial_port.write(code_gameended)
     if not disable_eyetracker:
         eyetracker.printToEDFfile(">>>>>>>>>>>>>>> GAME ENDED <<<<<<<<<<<<<<<")
 
@@ -227,17 +201,17 @@ def gameEnded ():
 
 def pieceMoved ():
     # declarar los globales que vayamos a usar
-    global board_n, line, board_ini, state, code_white, white_turn, code_black
+    global line, code_white, code_black, white_turn, last_turn_color, lpt, serial_port
 
-    # nos buscamos el tablero nuevo
-    board_n = line [board_ini:board_end]
+    print ">>>>>>>>>>>>>>> PIECE MOVED <<<<<<<<<<<<<<<"
+    print line
+    splitted = line.split()
 
-    # de una forma u otra, ya se movio al menos una pieza
-    state = 1
-
-    if state == 1:
-        print ">>>>>>>>>>>>>>> PIECE MOVED <<<<<<<<<<<<<<<"
-        print line
+    # Check that this is not a repeated line. We check it by verifying color of
+    # last turn and color included in new line. If colors are the same, then
+    # we have repeated lines, so skip this last line.
+    if not splitted[9] == last_turn_color:
+        last_turn_color = splitted[9]
 
         if splitted[9] == 'B':
             white_turn = False
@@ -249,16 +223,14 @@ def pieceMoved ():
         if white_turn:
             # If it's white_turn, then black player has made last move, and
             # so goes the mark to LPT
-            sendLPT (code_black)
+            lpt.write(code_black)
         else:
-            sendLPT (code_white)
+            lpt.write(code_white)
 
         if not disable_serial_port:
-            sendSerialPort (code_white if white_turn else code_black)
+            serial_port.write(code_white if white_turn else code_black)
 
         # Mandar mensaje al ET para marcar el evento.
-        splitted = line.split()
-        print splitted
 
         if not disable_eyetracker:
             eyetracker.printToEDFfile(msg)
@@ -271,27 +243,25 @@ def pieceMoved ():
 
 
 def mouseMoved ():
+    global line, lpt, serial_port
     if 'MOUSE RELEASED' in line:
-        sendLPT (code_mousereleased)
+        lpt.write(code_mousereleased)
         if not disable_serial_port:
-            sendSerialPort (code_mousereleased)
+            serial_port.write(code_mousereleased)
         if not disable_eyetracker:
             eyetracker.printToEDFfile("MOUSE RELEASED")
+        mousefile.write(line.strip() + '\n')
+            
     if 'MOUSE PRESSED' in line:
-        sendLPT (code_mousepressed)
+        lpt.write(code_mousepressed)
         if not disable_serial_port:
-            sendSerialPort (code_mousepressed)
+            serial_port.write(code_mousepressed)
         if not disable_eyetracker:
             eyetracker.printToEDFfile("MOUSE PRESSED")
         mousefile.write(line.strip() + '\n')
 
     return
 
-
-# Inicialización del puerto serie.
-if not disable_serial_port:
-    serialPort = serial.Serial(0)
-    print serialPort.portstr
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # #  Configuracion de parseo  # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
